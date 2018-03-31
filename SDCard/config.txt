@@ -1,0 +1,3 @@
+SSID=PupGround
+WIFIPW=sillydoggie
+PW=berlin

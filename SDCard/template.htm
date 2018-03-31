@@ -1,0 +1,141 @@
+<!-- Styles -->
+<!DOCTYPE HTML><html lang='en'><head><title>Radiation Monitor</title><meta charset='utf-8'>
+<style>
+#chartdiv { width : 100%; height : 500px; }								
+</style>
+
+<!-- Resources -->
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css">
+<script src="https://www.amcharts.com/lib/3/amcharts.js"></script>
+<script src="https://www.amcharts.com/lib/3/serial.js"></script>
+<script src="https://www.amcharts.com/lib/3/plugins/export/export.min.js"></script>
+<link rel="stylesheet" href="https://www.amcharts.com/lib/3/plugins/export/export.css" type="text/css" media="all" />
+<script src="https://www.amcharts.com/lib/3/themes/light.js"></script>
+
+<!-- Chart code -->
+<script>
+var xmlHttp=createXmlHttpObject()
+var xmlHttp2=createXmlHttpObject()
+function createXmlHttpObject()
+{
+ if(window.XMLHttpRequest) {
+    xmlHttp=new XMLHttpRequest()
+ }
+ else {
+    xmlHttp=new ActiveXObject('Microsoft.XMLHTTP')
+ }
+ return xmlHttp
+}
+
+function process(){
+ if(xmlHttp.readyState==0 || xmlHttp.readyState==4) {
+   xmlHttp.open('PUT','xml',true)
+   xmlHttp.onreadystatechange=handleServerResponse
+   xmlHttp.send(null)
+ }
+ setTimeout('process()',1000)
+}
+
+function handleServerResponse(){
+ if(xmlHttp.readyState==4 && xmlHttp.status==200)
+ {
+   xmlResponse=xmlHttp.responseXML
+   xmldoc = xmlResponse.getElementsByTagName('response')
+   message = xmldoc[0].firstChild.nodeValue
+   if (message=='Refresh')   {
+      location.reload()
+   }
+   else   {
+      document.getElementById('runtime').innerHTML=message
+   }
+ }
+}
+
+var chart = AmCharts.makeChart("chartdiv", {
+    "type": "serial",
+    "theme": "light",
+    "marginRight": 40,
+    "marginLeft": 40,
+    "mouseWheelZoomEnabled":true,
+    "dataDateFormat": "YYYY-MM-DD HH:NN",
+    "valueAxes": [{ "id": "v1", "axisAlpha": 0, "position": "left", "ignoreAxisWidth": true, "minimum": 0, "strictMinMax": true }],
+    "graphs": [{ "id": "g1", "balloon": {"drop":true, "adjustBorderColor":false, "color":"#ffffff"}, "lineColor": "#e06060", "lineThickness": 1, "valueField": "v1",},
+               { "id": "g2", "lineColor": "#C0C0C0", "lineThickness": 4, "valueField": "v2",}],
+    "chartScrollbar": {
+        "graph": "g1",
+        "oppositeAxis":false,
+        "offset":30,
+        "scrollbarHeight": 60,
+        "backgroundAlpha": 0,
+        "selectedBackgroundAlpha": 0.1,
+        "selectedBackgroundColor": "#888888",
+        "graphFillAlpha": 0,
+        "graphLineAlpha": 0.5,
+        "selectedGraphFillAlpha": 0,
+        "selectedGraphLineAlpha": 1,
+        "autoGridCount":true,
+        "color":"#AAAAAA"
+    },
+    "chartCursor": {
+        "pan": true,
+        "valueLineEnabled": true,
+        "valueLineBalloonEnabled": true,
+        "cursorAlpha":1,
+        "cursorColor":"#258cbb",
+        "limitToGraph":"g1",
+        "valueLineAlpha":0.2,
+        "valueZoomable":true
+    },
+    "valueScrollbar":{
+      "oppositeAxis":false,
+      "offset":50,
+      "scrollbarHeight":10
+    },
+    "categoryField": "date",
+    "categoryAxis": {
+        "parseDates": true,
+        "dashLength": 1,
+        "minorGridEnabled": true,
+	"minPeriod": "mm"
+    },
+    "export": { "enabled": true },
+    "dataProvider":
+[
+//{INSERTDATA}
+]
+});
+
+chart.addListener("rendered", zoomChart);
+zoomChart();
+
+function zoomChart(){
+    chart.zoomToIndexes(0, chart.dataProvider.length);
+}
+
+function ChangeUnits(){
+  if(xmlHttp2.readyState==0 || xmlHttp2.readyState==4)
+  {
+     xmlHttp2.open('PUT', 'SwapTheUnits', true);
+     xmlHttp2.send(null)
+     location.reload();
+  }
+}
+</script>
+
+<!-- HTML -->
+<BODY onload='process()'>
+<nav class="navbar navbar-default">
+<div class="container-fluid">
+<div class="navbar-header"><a class="navbar-brand" href="/">Radiation Monitor</a></div>
+<ul class="nav navbar-nav">
+<li><a href="/">Today</a></li>
+<li><a href="/rangeLastMonth.htm">Month</a></li>
+<li><a href="/archive.htm">Archive</a></li>
+<li><a href="/admin.htm">Admin</a></li>
+<li><a href="/help.htm">Help</a></li>
+<li><button type="button" onclick="ChangeUnits()">Units<br>cpm/uSv</button></li>
+</ul></div></nav>
+<p style="margin-left: 40px;font-size:60px"><A id='runtime'></A></p>
+<!--INSERTDATEPICKER-->
+<div id="chartdiv"></div><BR>
+</BODY></HTML>
