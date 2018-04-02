@@ -27,6 +27,7 @@
 #define NVR_TIMEOUT     6  // Reboot flag - sets wireless behvior on boot - 1 byte
 #define NVR_ALARM_HR_L  7  // 1Hr average low alarm threshold - 2 bytes
 #define NVR_ALARM_HR_H  9  // 1Hr average high alarm threshold - 2 bytes
+#define NVR_AUDIOALARM  11 // Enable audio alarm - 1 byte
 #define WIFITIMEOUTFLAG B10101010
 
 ESP8266WebServer server(80);
@@ -56,11 +57,13 @@ int AlarmThresholdHH;
 int AlarmStatus=0;
 int AlarmTryCount=0;
 int AudioEnabled=0;
+int AudioAlarm=0;
+int AudioAlarmCount=0;
 volatile int AlarmLockout=0;
 volatile bool WifiStarting=false;
 int AlarmLockoutTime;
 bool OneSecFlag=false;
-static const char NavBar[] PROGMEM = "<!DOCTYPE HTML><html lang='en'><head><title>Radiation Monitor</title><meta charset='utf-8'><link rel='stylesheet' href='https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css'><script src='https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js'></script><script src='https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js'></script></head><BODY onload='process()'><nav class='navbar navbar-default'><div class='container-fluid'><div class='navbar-header'><a class='navbar-brand' href='/'>Radiation Monitor</a></div><ul class='nav navbar-nav'><li><a href='/'>Today</a></li><li><a href='/rangeLastMonth.htm'>Month</a></li><li><a href='/archive.htm'>Archive</a></li><li><a href='/admin.htm'>Admin</a></li><li><a href='/help.htm'>Help</a></li></ul></div></nav>";
+static const char NavBar[] PROGMEM = "<!DOCTYPE HTML><html lang='en'><head><title>Radiation Monitor</title><meta charset='utf-8'><link rel='stylesheet' href='https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css'><script src='https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js'></script><script src='https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js'></script></head><BODY onload='process()'><nav class='navbar navbar-default'><div class='container-fluid'><div class='navbar-header'><a class='navbar-brand' href='/'>Radiation Monitor</a></div><ul class='nav navbar-nav'><li><a href='/today'>Today</a></li><li><a href='/rangeLastMonth'>Month</a></li><li><a href='/archive.htm'>Archive</a></li><li><a href='/admin.htm'>Admin</a></li><li><a href='/help.htm'>Help</a></li></ul></div></nav>";
 static const char CcsStyle[] PROGMEM = "<style>td { padding-right: 30px; } table {margin-left:40px;font-size:20px; } p {margin-left:40px;font-size:15px; } p2 {margin-left:40px;font-size:25px; } a {color: black;} .list-group-item { padding: 5px 20px}</style>";
 static String Months[]={"January","February","March","April","May","June","July","August","September","October","November","December"};
 static int MonthDays[]={31,28,31,30,31,30,31,31,30,31,30,31};
@@ -85,6 +88,7 @@ void ServiceAlarm()  // IFTTT notification
     IFTTTMaker ifttt(KEY, client); 
     LogString(String(F("Alarm: "))+AlarmMessage+"\n",1);
     Serial.printf("Mem:%d\n",FreeMem());
+    if (AudioAlarm) AudioAlarmCount=8;
     if (FreeMem()>26000)
     {
         if (ifttt.triggerEvent(EVENT_NAME,AlarmMessage))
@@ -145,7 +149,7 @@ void inline PulseISR(void)
   if (AudioEnabled)
   {
       digitalWrite(AUDIOPIN, 0);
-      delayMicroseconds(50); // Not ideal, but dont have a spare timer to trigger an int to close
+      delayMicroseconds(100); // Not ideal, but dont have a spare timer to trigger an int to close
       digitalWrite(AUDIOPIN, 1);
   }
 }
@@ -345,7 +349,8 @@ int DaysInMonth(int Month)
 {
   return MonthDays[(Month-1)%12];   
 }
-void ShowGraphPage(String FileName) // Allowed filenames:  "/" "20180323.dat" "/range"(with 3 args) "/rangelastmonth"
+
+void ShowGraphPage(String FileName) // Allowed filenames:  "20180323.dat" "/range"(with 3 args) "/rangelastmonth" "/today"
 {
   String TempLine="";
   String Content="";
@@ -356,20 +361,20 @@ void ShowGraphPage(String FileName) // Allowed filenames:  "/" "20180323.dat" "/
   File myFile= SD.open(F("template.htm"), FILE_READ);
   if (myFile)
   {
-    if (FileName=="/range") FileName="/range"+ConvertDateFormat(server.arg(0))+"to"+ConvertDateFormat(server.arg(1))+server.arg(2);
-    if (FileName=="/")      FileName="/data/"+String(now.year())+"/"+GetDateTimeStr(3)+".dat";
-    if (FileName=="/rangelastmonth.htm"|| FileName=="/rangelastweek.htm")
+    if (FileName==F("/range")) FileName="/range"+ConvertDateFormat(server.arg(0))+"to"+ConvertDateFormat(server.arg(1))+server.arg(2);
+    if (FileName==F("/today")) FileName="/data/"+String(now.year())+"/"+GetDateTimeStr(3)+".dat";
+    if (FileName==F("/rangelastmonth")|| FileName==F("/rangelastweek"))
     {
       TempYear=now.year();
       TempMonth=now.month();
       TempDays=now.day();
-      if (FileName=="/rangelastmonth.htm")
+      if (FileName==F("/rangelastmonth"))
       {
         TempMonth--;
         if (TempMonth<1) { TempMonth=12; TempYear--; }
-        if (TempDays>DaysInMonth(now.month())) TempDays=DaysInMonth(now.month());
+        if (TempDays>DaysInMonth(TempMonth)) TempDays=DaysInMonth(TempMonth);
       }
-      if (FileName=="/rangelastweek.htm")
+      if (FileName==F("/rangelastweek"))
       {
         TempDays-=7;
         if (TempDays<1)
@@ -379,16 +384,16 @@ void ShowGraphPage(String FileName) // Allowed filenames:  "/" "20180323.dat" "/
           TempDays+=DaysInMonth(TempMonth);
         }
       }
-      FileName="/range"+String(TempYear)+Int2StrLZ(TempMonth)+Int2StrLZ(TempDays)+"to"+GetDateTimeStr(3);
+      FileName=String(F("/range"))+String(TempYear)+Int2StrLZ(TempMonth)+Int2StrLZ(TempDays)+"to"+GetDateTimeStr(3);
     }
     LogString(FileName+" ("+server.client().remoteIP().toString()+")..",1);
     server.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server.send(200, F("text/html"), "");       
-    while(myFile.available())
+    while(myFile.available()) 
     {
       TempLine = myFile.readStringUntil('\n');
       TempLine.trim();     
-      if (TempLine=="\/\/{INSERTDATA}")
+      if (TempLine==F("\/\/{INSERTDATA}"))
       {
         if (Content.length()>0) server.sendContent(Content);  // flush the buffer
         Content="";
@@ -399,7 +404,7 @@ void ShowGraphPage(String FileName) // Allowed filenames:  "/" "20180323.dat" "/
       }
       else
       {
-        if (TempLine=="<!--INSERTDATEPICKER-->" && FileName.indexOf("/range")==0)  // Format "/range20180319to20180402"
+        if (TempLine==F("<!--INSERTDATEPICKER-->") && FileName.indexOf(F("/range"))==0)  // Format "/range20180319to20180402"
              Content+=GetRangeDatePickerString(FileName.substring(6,10)+"-"+FileName.substring(10,12)+"-"+FileName.substring(12,14),FileName.substring(16,20)+"-"+FileName.substring(20,22)+"-"+FileName.substring(22,24),server.arg(2));
         else
             Content+=TempLine+"\n";
@@ -492,7 +497,6 @@ void InjectDataFromFile(String FileName)
   LogString(F(" Data File not found "),0);
 }
 
-
 void LoggingTick()
 {  //  output format: date,value\n
   String FileName;
@@ -534,10 +538,7 @@ void LoggingTick()
          {
             TriggerAlarm(String(TempVal/1000,2)+"uSv/Hr ("+String(HourAvg)+"cpm)",10,AlarmLockoutTime); // message, 10 retrys, lockout time (sec)
             LogString(F("Requesting Alarm (Hour Low)\n"),1);
-         }
-
-
-         
+         }         
        }
      }
      if (LastDay!=now.day())
@@ -577,6 +578,7 @@ void HandleNotFound()
       if (Uri.indexOf("/xml")>=0)    { SendRTData(); return; }      
       if (Uri.indexOf("/range")>=0)  { ShowGraphPage(Uri); return;}
       if (Uri=="/")                  { ShowGraphPage("/rangelastweek"); return;}
+      if (Uri=="/today")             { ShowGraphPage("/today"); return;}
       if (Uri=="/favicon.ico")       { SendFile(Uri, F("image/x-icon")); return; }
       if (Uri=="/robots.txt")        { SendFile(Uri, F("text/plain")); return;}
       if (Uri=="/admin.htm")         { HandleAdminPage(); return; }
@@ -644,9 +646,11 @@ void HandleAdminPage() // Request for Admin Page
       Err+=ReadIntArgValue(F("Second"),&Sec);
       if (!Err) rtc.adjust(DateTime(Year, Month, Day, Hour, Min, Sec));
       if (!ReadIntArgValue(F("PWM"),&PwmWidth)) analogWrite(PWMPIN, PwmWidth); // PWM Pulse width
-      if (server.hasArg(F("AUDIOEN")))  AudioEnabled=1;
-      else                              AudioEnabled=0;
+      ReadIntArgValue(F("AUDIOALARM"),&AudioAlarm);
+      ReadIntArgValue(F("AUDIOEN"),&AudioEnabled);
+      
       WriteNVR(NVR_AUDIO,AudioEnabled&255);
+      WriteNVR(NVR_AUDIOALARM,AudioAlarm&255);
 
       if (server.hasArg(F("ALARM")))
       {
@@ -680,16 +684,17 @@ void HandleAdminPage() // Request for Admin Page
       if (server.hasArg(F("reboot")))     Reboot(true);
       if (server.hasArg(F("ALARMTEST")))
       {
-        TriggerAlarm("Test",1,0); // No retry, no lockout
+        TriggerAlarm(F("Test"),1,0); // No retry, no lockout
         ServiceAlarm();
         TriggerAlarm("",0,0); // clear it down in case it failed
       }
       if (server.hasArg(F("CLEARLOG")))
-        if (server.arg(0) == AdminPw)
+        if (server.arg("CLEARLOG") == AdminPw)
         {
             Serial.println(F("Clearing Log"));
-            SD.remove("log.txt");
-            LogString("Log Deleted ("+server.client().remoteIP().toString()+")..",1);
+            SD.remove(F("log.txt"));
+            SD.remove(F("ip.txt"));
+            LogString(String(F("Logs Deleted ("))+server.client().remoteIP().toString()+")..",1);
         }
     }
     now = rtc.now();
@@ -709,16 +714,18 @@ void HandleAdminPage() // Request for Admin Page
     Content += F("<div class='panel panel-default'><div class='panel-heading'>Setup</div><div class='panel-body'><form action='/admin.htm' method='POST'>");
     Content += String(F("<p><input type='text' size=4 name='PWM' value='"))+String(PwmWidth)+String(F("'> PWM Pulse Width<br>"));
     Content += String(F("<input type='text' size=4 name='ALARM' value='"))+String(AlarmThreshold)+String(F("'> Alert Alarm Threshold (nSv/Hr) 0=No Alarm<br>"));
-    Content += String(F("<input type='text' size=4 name='ALARMHL' value='"))+String(AlarmThreshold)+String(F("'> Hour Average Alert Alarm Threshold - LOW (nSv/Hr) 0=No Alarm<br>"));
-    Content += String(F("<input type='text' size=4 name='ALARMHH' value='"))+String(AlarmThreshold)+String(F("'> Hour Average Alert Alarm Threshold - HIGH (nSv/Hr) 0=No Alarm<br>"));  
+    Content += String(F("<input type='text' size=4 name='ALARMHL' value='"))+String(AlarmThresholdHL)+String(F("'> Hour Average Alert Alarm Threshold - LOW (nSv/Hr) 0=No Alarm<br>"));
+    Content += String(F("<input type='text' size=4 name='ALARMHH' value='"))+String(AlarmThresholdHH)+String(F("'> Hour Average Alert Alarm Threshold - HIGH (nSv/Hr) 0=No Alarm<br>"));  
     Content += String(F("<input type='text' size=4 name='LOCKOUT' value='"))+String(int(AlarmLockoutTime/60))+String(F("'> Alert Alarm Lockout period (min)<br>"));   
-    if (AudioEnabled)  Content += F("<input type='checkbox' name='AUDIOEN' value='1' checked>Enable Audio<br>");
-    else               Content += F("<input type='checkbox' name='AUDIOEN' value='0'>Enable Audio<br>");
+    if (AudioEnabled) Content += F("Audio Click: <input type='radio' name='AUDIOEN' value='1' checked>&nbsp On <input type='radio' name='AUDIOEN' value='0'>&nbsp Off<br>");
+    else              Content += F("Audio Click: <input type='radio' name='AUDIOEN' value='1' >&nbsp On <input type='radio' name='AUDIOEN' value='0'checked>&nbsp Off<br>");
+    if (AudioAlarm)   Content += F("Audio Alarm: <input type='radio' name='AUDIOALARM' value='1' checked>&nbsp On <input type='radio' name='AUDIOALARM' value='0'>&nbsp Off<br>");
+    else              Content += F("Audio Alarm: <input type='radio' name='AUDIOALARM' value='1' >&nbspOn <input type='radio' name='AUDIOALARM' value='0'checked>&nbsp Off<br>");
     Content += F("<input type='submit' size=4 name='SUBMIT' value='Submit'></p></form><br>");
     Content += F("<form action='/log.txt' method=\'post'><p><input type='submit' name='SHOWLOG' value='Show Log'></p></form>");
     Content += F("<form action='/ip.txt' method=\'post'><p><input type='submit' name='SHOWIPLOG' value='Show IP Log'></p></form>");
     Content += F("<form action='/admin.htm' method='POST'><p>");
-    Content += F("<input type='submit' name='SUBMIT' value='Clear Log'>");
+    Content += F("<input type='submit' name='SUBMIT' value='Clear Logs'>");
     Content += F("<input type='password' name='CLEARLOG' placeholder='password'></p></form>");
     Content += F("<form action='/admin.htm' method='post'><p><input type='submit' name='ALARMTEST' value='Alarm Test'></p></form>");
     if (AlarmStatus==ALARM_FAILMEM) Content += F("<p>Send Failed (Low memory)</p>");
@@ -752,7 +759,7 @@ void HandleAdminPage() // Request for Admin Page
         server.sendHeader(F("Cache-Control"),F("no-cache"));
         server.sendHeader(F("Set-Cookie"),F("RADMON_LOGIN=1"));
         server.send(303);
-        LogString("OK (Logged in)\n",0);
+        LogString(F("OK (Logged in)\n"),0);
         return;
       }
       msg = F("<p>Wrong password!</p>");
@@ -933,16 +940,16 @@ void CreateArchivePage()
     String YearStr;
     String DayStr;
     File OptFile;
-    File dir=SD.open("/Data");
+    File dir=SD.open(F("/Data"));
     if (dir)
     {
-      OptFile = SD.open("/archive.htm", FILE_READ);
+      OptFile = SD.open(F("/archive.htm"), FILE_READ);
       Content = OptFile.readStringUntil('\n'); // Format "<!--20181225-->"
       if (Content.substring(4,8).toInt()==now.year() && Content.substring(8,10).toInt()==now.month() && Content.substring(10,12).toInt()==now.day()) return;     
       OptFile.close();
       Serial.print(F("Creating Archive Page.."));
-      SD.remove("/archive.htm");
-      OptFile = SD.open("/archive.htm", FILE_WRITE);
+      SD.remove(F("/archive.htm"));
+      OptFile = SD.open(F("/archive.htm"), FILE_WRITE);
       OptFile.print("<!--"+String(now.year())+Int2StrLZ(now.month())+Int2StrLZ(now.day())+"-->\n");
       OptFile.print(String(NavBar)+"\n"+String(CcsStyle)+"\n");      
       OptFile.print(F("<div class='container'>"));
@@ -1002,7 +1009,7 @@ void CreateArchivePage()
 
 String GetRangeDatePickerString(String FromDate, String ToDate, String DayAv)
 { // Construct the string required to add a date picker to a page
-  if (DayAv=="day") DayAv="checked"; 
+  if (DayAv==F("day")) DayAv=F("checked"); 
   return String(F("<div style='margin-left: 40px'><form class='form-inline' action='/range' method='post'><div class='form-group'><label for='fromdate'>From:</label><input type='date' class='form-control' id='fromdate' name='from' value='"))+FromDate+String(F("'>&nbsp</div><div class='form-group'><label for='todate'>To:</label><input type='date' class='form-control' id='todate' name='to' value='"))+ToDate+String(F("'>&nbsp</div><label class='checkbox-inline'><input type='checkbox' name='day' value='day'"))+DayAv+String(F(">Day Average </label>&nbsp<button type='submit' class='btn btn-default'>Submit</button></form></div>"));
 }
 
@@ -1013,8 +1020,7 @@ void SubmitRadReading(int CPM)
   String Username="blah";
   String Password="blah";
   Temp="GET /radmon.php?function=submit&user="+Username+"&password="+Password+"&value="+String(CPM)+"&unit=CPM HTTP/1.0 HOST: radmon.org Connection: close\r\n\r\n";
-
-  Serial.println("Sumitting reading");
+  Serial.println("Subitting reading");
   client.println(Temp);
   Serial.println("Respond:");
   while(client.available())
@@ -1033,7 +1039,7 @@ void setup()
   PwmWidth=300;
   analogWrite(PWMPIN, PwmWidth); // PWM Pulse width
   analogWriteFreq(8000);  // PWM Frequency
-  Serial.begin(74880);
+  Serial.begin(74880); 
   delay(100);
   Serial.println();
   InitSDCard();
@@ -1052,6 +1058,7 @@ void setup()
   AlarmThreshold=ReadNVR(NVR_ALARM)*256+ReadNVR(NVR_ALARM+1);
   AlarmLockoutTime=ReadNVR(NVR_LOCKOUT)*256+ReadNVR(NVR_LOCKOUT+1);
   AudioEnabled=ReadNVR(NVR_AUDIO);
+  AudioAlarm=ReadNVR(NVR_AUDIOALARM);
 //  SD.remove("/archive.htm");
   CreateArchivePage();
 }
@@ -1087,6 +1094,11 @@ void loop()
     Watchdog=60;
     if (OneSecTick>60)      LoggingTick();
     if (!(OneSecTick%60))   CheckWifi(); // Every minute check the wifi
+    if (AudioAlarmCount>0)
+    {
+       Beep(200);
+       AudioAlarmCount--;
+    }  
     ServiceAlarm();
     AlarmStatus=0; // stops result showing up on the admin page
   }
